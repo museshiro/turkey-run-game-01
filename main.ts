@@ -36,7 +36,19 @@ function countFiles(dir: string): number {
 }
 
 function main(): void {
-  rmSync(outputDir, { recursive: true, force: true });
+  // Clean only the contents we own inside outputDir, never outputDir itself:
+  // on the grader /output is a writable mount whose parent (/) is read-only,
+  // so removing /output itself needs a write to / and fails with EPERM/EROFS.
+  for (const child of ['game', 'screenshots', 'dossier.json']) {
+    try {
+      rmSync(join(outputDir, child), { recursive: true, force: true });
+    } catch (err) {
+      // A stale child we cannot remove must not abort the run: copyTree
+      // below overwrites game/screenshots and dossier.json is rewritten,
+      // so the worst case is leftover files, not a failed submission.
+      console.warn(`warn: could not remove ${join(outputDir, child)}: ${(err as Error).message}`);
+    }
+  }
   mkdirSync(outputDir, { recursive: true });
   copyTree('game');
   copyTree('screenshots');
