@@ -3,23 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Pipkin's Great Escape — a turkey runs 1,500 metres from Farmer Bram, dodging the oven and the carving knife.">
-<title>Pipkin's Great Escape — a Thanksgiving turkey run</title>
+<title>Pipkin's Great Escape — Turkey Run Game</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="stage">
-    <canvas id="game" width="960" height="540" tabindex="0" aria-label="Pipkin's Great Escape game"></canvas>
-    <p class="hint">SPACE / ↑ jump &nbsp;·&nbsp; ↓ slide &amp; hide &nbsp;·&nbsp; P pause &nbsp;·&nbsp; 1 / 2 pick a mode &nbsp;·&nbsp; click the buttons</p>
-  </main>
-  <script src="src/config.js"></script>
-  <script src="src/random.js"></script>
-  <script src="src/audio.js"></script>
-  <script src="src/input.js"></script>
-  <script src="src/art.js"></script>
-  <script src="src/world.js"></script>
-  <script src="src/entities.js"></script>
-  <script src="src/shots.js"></script>
-  <script src="src/main.js"></script>
+<main id="wrap">
+  <canvas id="game" width="960" height="540"></canvas>
+  <p id="help">SPACE jump &nbsp;•&nbsp; DOWN duck &amp; hide &nbsp;•&nbsp; SHIFT dash &nbsp;•&nbsp; H hide &nbsp;•&nbsp; P pause &nbsp;•&nbsp; M mute &nbsp;•&nbsp; 1/2/3 pick a mode</p>
+  <p id="tag">Pipkin's Great Escape — run 1,500 m from the farmyard to the kitchen, dodge the oven and the carving knife, and don't let Farmer Bram catch you.</p>
+</main>
+<script src="src/config.js"></script>
+<script src="src/random.js"></script>
+<script src="src/audio.js"></script>
+<script src="src/input.js"></script>
+<script src="src/art.js"></script>
+<script src="src/zones.js"></script>
+<script src="src/farmer.js"></script>
+<script src="src/scoring.js"></script>
+<script src="src/feedback.js"></script>
+<script src="src/hud.js"></script>
+<script src="src/world.js"></script>
+<script src="src/entities.js"></script>
+<script src="src/shots.js"></script>
+<script src="src/main.js"></script>
 </body>
 </html>
