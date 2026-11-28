@@ -1,267 +1,192 @@
-// Pipkin's Great Escape — the living parts: Pipkin's run/jump/slide physics,
-// Farmer Bram's chase/search/sprint AI, hazards, pickups, collisions and
-// the score. Pure logic; Art draws it, main.js drives it.
-'use strict';
-
-const TURKEY_X = 210;
-const GRAVITY = 2300;
-const JUMP_V = 820;
-
-function makeTurkey() {
-  return {
-    y: GROUND_Y, vy: 0, grounded: true, sliding: false, slideT: 0,
-    runPhase: 0, invulnT: 0, blink: 0, hidden: false, shield: false,
-    width: 52, height: 62,
-  };
+// entities.js — the turkey, hazards and spawn points; turkey
+// movement and basic collision.
+function Turkey() {
+  this.x = CFG.TURKEY_X;
+  this.y = CFG.GROUND_Y - 26;
+  this.vy = 0;
+  this.onGround = true;
+  this.ducking = false;
+  this.hidden = false;
+  this.dashing = false;
+  this.dashT = 0;
+  this.iframes = 0;
+  this.hideT = 0;
+  this.nearHay = null;
 }
 
-function makeFarmer(cfg) {
-  return {
-    x: TURKEY_X - cfg.farmerGapStart, gap: cfg.farmerGapStart,
-    runPhase: 0, state: 'chase', searchT: 0, searchClock: 0,
-    spotted: false, sprintT: 0,
-  };
+function makeHazard(kind, x, rng) {
+  var h = { kind: kind, x: x, y: CFG.GROUND_Y, vx: 0, vy: 0, passed: false, nearMissed: false, w: 40, h: 40, t: 0, telegraph: 0 };
+  if (kind === 'pumpkin') { h.w = 44; h.h = 36; h.y = CFG.GROUND_Y - 18; }
+  else if (kind === 'mud') { h.w = 90; h.h = 10; h.y = CFG.GROUND_Y - 2; }
+  else if (kind === 'hay') { h.w = 60; h.h = 36; h.y = CFG.GROUND_Y - 18; h.hideSpot = true; }
+  else if (kind === 'slider') { h.w = 46; h.h = 16; h.y = CFG.GROUND_Y - 8; h.vx = -60; }
+  else if (kind === 'faller') { h.w = 20; h.h = 46; h.x = x; h.y = 40; h.vy = 0; h.telegraph = 0.55; h.falling = false; }
+  else if (kind === 'oven') { h.w = 68; h.h = 64; h.y = CFG.GROUND_Y - 32; }
+  else if (kind === 'cart') { h.w = 76; h.h = 46; h.y = CFG.GROUND_Y - 24; }
+  else if (kind === 'gravy') { h.w = 80; h.h = 8; h.y = CFG.GROUND_Y - 4; }
+  else if (kind === 'corn') { h.w = 18; h.h = 26; h.y = CFG.GROUND_Y - 60; h.pickup = true; }
+  else if (kind === 'feather') { h.w = 16; h.h = 26; h.y = CFG.GROUND_Y - 90; h.pickup = true; }
+  else if (kind === 'boat') { h.w = 34; h.h = 20; h.y = CFG.GROUND_Y - 60; h.pickup = true; h.power = 'shield'; }
+  else if (kind === 'magnet') { h.w = 30; h.h = 30; h.y = CFG.GROUND_Y - 70; h.pickup = true; h.power = 'magnet'; }
+  else if (kind === 'decoy') { h.w = 40; h.h = 34; h.y = CFG.GROUND_Y - 18; h.pickup = true; h.power = 'decoy'; }
+  return h;
 }
 
-function makeRun(cfg, seed) {
-  return {
-    cfg, seed,
-    rng: makeRng(seed),
-    turkey: makeTurkey(),
-    farmer: makeFarmer(cfg),
-    obstacles: [], pickups: [],
-    distance: 0, score: 0, corn: 0, lives: cfg.lives,
-    speed: cfg.baseSpeed,
-    nextSpawnAt: 420,
-    stageIdx: 0, stageBannerT: 0, stageBanner: '',
-    shakeT: 0, flashT: 0, time: 0,
-    caught: false, escaped: false, gateX: -1,
-    message: '', messageT: 0,
-  };
+// stepTurkey — jump, duck, dash and hide from the current input.
+function stepTurkey(t, dt, input, G) {
+  t.iframes = Math.max(0, t.iframes - dt);
+  t.dashT = Math.max(0, t.dashT - dt);
+  t.dashing = t.dashT > 0;
+  if (input.dashQueued && G.dashPips >= 1 && !t.dashing) {
+    G.dashPips -= 1;
+    t.dashT = CFG.DASH_TIME;
+    t.dashing = true;
+    // A dash buys distance from Bram as well as speed.
+    G.farmer.gap = Math.min(160, G.farmer.gap + 8);
+    spawnSparkBurst(G.floaters, t.x, t.y + 10, '#4ad0ff', 8);
+  }
+  input.dashQueued = false;
+  if (input.jumpHeld && t.onGround && !t.ducking) {
+    t.vy = -CFG.JUMP_V;
+    t.onGround = false;
+    AudioSys.playJump();
+  }
+  t.ducking = input.duckHeld && t.onGround;
+  if (!t.onGround) {
+    t.vy += CFG.GRAVITY * dt;
+    t.y += t.vy * dt;
+    if (t.y >= CFG.GROUND_Y - 26) {
+      t.y = CFG.GROUND_Y - 26;
+      t.vy = 0;
+      t.onGround = true;
+    }
+  }
+  // hiding: hold duck beside hay
+  if (t.ducking && t.nearHay && !t.hidden) {
+    t.hideT += dt;
+    if (t.hideT > 0.35) {
+      t.hidden = true;
+      spawnFloatText(G.floaters, 'HIDDEN!', t.x, t.y - 70, '#7ad05a', true);
+      AudioSys.playHidden();
+    }
+  } else if (!t.ducking || !t.nearHay) {
+    t.hidden = false;
+    t.hideT = 0;
+  }
 }
 
-function turkeyHitbox(t) {
-  if (t.sliding) return { x: TURKEY_X - 26, y: t.y - 34, w: 56, h: 34 };
-  return { x: TURKEY_X - 24, y: t.y - 62, w: 48, h: 62 };
+// turkeyRect — the turkey's collision box (smaller while ducking).
+function turkeyRect(t) {
+  var h = t.ducking || t.hidden ? CFG.DUCK_H : CFG.STAND_H;
+  return { x: t.x - 18, y: t.y - h + 26, w: 36, h: h };
 }
 
-function overlaps(a, b) {
+function rectsOverlap(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
-function spawnCluster(run) {
-  const { cluster, gap } = World.nextCluster(run.rng, run.cfg, run.distance);
-  for (const s of cluster) {
-    if (s.type === 'corn' || s.type === 'gravy') run.pickups.push({ ...s, taken: false, bob: 0 });
-    else run.obstacles.push({ ...s, hit: false, passed: false });
-  }
-  run.nextSpawnAt = run.distance + gap;
-}
-
-function hurtTurkey(run, cause) {
-  const t = run.turkey;
-  if (t.invulnT > 0 || run.caught || run.escaped) return;
-  if (t.shield) {
-    t.shield = false;
-    t.invulnT = 1.2;
-    run.message = 'GRAVY SHIELD SAVED YOU!';
-    run.messageT = 1.4;
-    SoundBank.thud();
-    return;
-  }
-  run.lives -= 1;
-  t.invulnT = 1.6;
-  run.shakeT = 0.35;
-  run.flashT = 0.25;
-  // The farmer lunges closer on every stumble.
-  run.farmer.gap = Math.max(40, run.farmer.gap - run.cfg.farmerCatchUp * 2.2);
-  run.message = cause === 'oven' ? 'TOO HOT! The oven singed your tail!' : 'OUCH! The carving knife nicked you!';
-  run.messageT = 1.4;
-  SoundBank.thud();
-  if (run.lives <= 0) {
-    run.caught = true;
-    SoundBank.caught();
-  }
-}
-
-// One fixed step of the run. Returns 'caught' | 'escaped' | 'playing'.
-function stepRun(run, dt, input) {
-  const cfg = run.cfg;
-  const t = run.turkey;
-  const f = run.farmer;
-  run.time += dt;
-
-  // Speed ramps with distance, capped per variant.
-  run.speed = Math.min(cfg.topSpeed, cfg.baseSpeed + run.distance * cfg.accel * 0.01);
-  run.distance += (run.speed * dt) / 10;
-  run.score += run.speed * dt * 0.02 * cfg.scoreMult;
-
-  // Stage changes announce themselves.
-  const si = stageIndexAt(run.distance);
-  if (si !== run.stageIdx) {
-    run.stageIdx = si;
-    run.stageBanner = stageAt(run.distance).name;
-    run.stageBannerT = 2.2;
-    run.message = 'STAGE: ' + run.stageBanner;
-    run.messageT = 2.2;
-    SoundBank.gobble();
-  }
-  if (run.stageBannerT > 0) run.stageBannerT -= dt;
-  if (run.messageT > 0) run.messageT -= dt;
-  if (run.shakeT > 0) run.shakeT -= dt;
-  if (run.flashT > 0) run.flashT -= dt;
-  if (t.invulnT > 0) t.invulnT -= dt;
-
-  // --- Turkey controls ---
-  const wantJump = input.wasPressed(' ', 'ArrowUp', 'w', 'W');
-  const wantSlide = input.isDown('ArrowDown', 's', 'S');
-  if (wantJump && t.grounded && !t.sliding) {
-    t.vy = -JUMP_V;
-    t.grounded = false;
-    t.sliding = false;
-    SoundBank.jump();
-  }
-  if (!t.grounded) {
-    t.vy += GRAVITY * dt;
-    t.y += t.vy * dt;
-    if (t.y >= GROUND_Y) { t.y = GROUND_Y; t.vy = 0; t.grounded = true; }
-  }
-  if (wantSlide && t.grounded) {
-    if (!t.sliding) t.slideT = 0;
-    t.sliding = true;
-    t.slideT += dt;
-  } else if (t.sliding) {
-    t.sliding = false;
-  }
-  t.runPhase += dt * (run.speed / 40);
-  t.blink = f.gap < 90 ? (Math.sin(run.time * 14) > 0 ? 1 : 0) : 0;
-
-  // Hiding (variant B): hold Down while overlapping a hay bale.
-  const wasHidden = t.hidden;
-  t.hidden = false;
-  if (cfg.hideEnabled && t.sliding) {
-    const box = turkeyHitbox(t);
-    for (const o of run.obstacles) {
-      if (o.type === 'hay' && overlaps(box, { x: o.x - 6, y: GROUND_Y - o.h - 6, w: o.w + 12, h: o.h + 6 })) {
-        t.hidden = true;
-        break;
+// stepHazards — scroll hazards, drop falling knives, expire off-screen.
+function stepHazards(G, dt, scrollPx) {
+  var list = G.hazards;
+  for (var i = list.length - 1; i >= 0; i--) {
+    var h = list[i];
+    h.t += dt;
+    h.x -= scrollPx * dt;
+    if (h.kind === 'slider') h.x += h.vx * dt;
+    if (h.kind === 'faller') {
+      if (h.telegraph > 0) {
+        h.telegraph -= dt;
+        if (h.telegraph <= 0) { h.falling = true; AudioSys.playKnife(); }
+      } else if (h.falling) {
+        h.vy += 1400 * dt;
+        h.y += h.vy * dt;
+        if (h.y > CFG.GROUND_Y - 20) { h.y = CFG.GROUND_Y - 20; h.falling = false; h.stuck = true; }
       }
     }
+    if (h.x < -120) list.splice(i, 1);
   }
-  if (t.hidden && !wasHidden) SoundBank.rustle();
-  if (t.hidden) run.score += 6 * dt * cfg.scoreMult; // sneaking pays a little
+}
 
-  // --- Farmer AI ---
-  f.runPhase += dt * (run.speed / 38);
-  f.searchClock += dt;
-  if (f.state === 'search') {
-    f.searchT -= dt;
-    // He scans the field; if Pipkin is out in the open and close, he spots him.
-    if (!t.hidden && t.grounded && !t.sliding) {
-      f.spotted = true;
-      f.state = 'sprint';
-      f.sprintT = 1.6;
-      SoundBank.alarm();
-      run.message = 'SPOTTED! RUN!';
-      run.messageT = 1.2;
-    } else if (f.searchT <= 0) {
-      f.state = 'chase';
-      f.spotted = false;
-      run.message = 'He lost your trail...';
-      run.messageT = 1.2;
+// checkCollisions — pickups, hits, near misses and clean dodges.
+function checkCollisions(G) {
+  var t = G.turkey;
+  var tr = turkeyRect(t);
+  var sk = G.score;
+  t.nearHay = null;
+  for (var i = G.hazards.length - 1; i >= 0; i--) {
+    var h = G.hazards[i];
+    if (h.kind === 'hay' && Math.abs(h.x - t.x) < 70) t.nearHay = h;
+    var hr = { x: h.x - h.w / 2, y: h.y - h.h / 2, w: h.w, h: h.h };
+    if (h.pickup) {
+      if (rectsOverlap(tr, hr)) {
+        if (h.kind === 'corn') { sk.corn++; addScore(sk, 25, G.mode.scoreMult); spawnFloatText(G.floaters, '+25 CORN', h.x, h.y - 30, '#ffd23a'); }
+        else if (h.kind === 'feather') {
+          sk.feathers++;
+          addScore(sk, 5, G.mode.scoreMult);
+          if (sk.feathers >= CFG.FEATHERS_PER_SHIELD) {
+            sk.feathers = 0; G.shield = true; sk.shieldsEarned++;
+            spawnFloatText(G.floaters, 'GRAVY SHIELD!', t.x, t.y - 80, '#7ad0ff', true);
+            AudioSys.playShield();
+          }
+        } else if (h.power === 'shield') { G.shield = true; spawnFloatText(G.floaters, 'GRAVY SHIELD!', t.x, t.y - 80, '#7ad0ff', true); AudioSys.playShield(); }
+        else if (h.power === 'magnet') { G.magnetT = 6; spawnFloatText(G.floaters, 'CORN MAGNET!', t.x, t.y - 80, '#ff9ad0'); }
+        else if (h.power === 'decoy') {
+          G.farmer.gap += 20;
+          spawnFloatText(G.floaters, 'PUMPKIN DECOY!', t.x, t.y - 80, '#e88a1e');
+          farmerSetState(G.farmer, 'SEARCHING');
+        }
+        AudioSys.playPickup();
+        G.hazards.splice(i, 1);
+        continue;
+      }
+      if (G.magnetT > 0 && h.kind === 'corn' && Math.abs(h.x - t.x) < 160) h.x += (t.x - h.x) * 0.08;
+      continue;
     }
-  } else if (f.state === 'sprint') {
-    f.sprintT -= dt;
-    f.gap = Math.max(46, f.gap - 190 * dt);
-    if (f.sprintT <= 0) { f.state = 'chase'; f.spotted = false; }
-  } else {
-    // Chase: the gap breathes — it grows when you run clean, shrinks when
-    // you stumble. Near the end he corners you and pushes harder.
-    const endgame = run.distance > ESCAPE_DISTANCE - 260;
-    const drift = endgame ? -14 : 9;
-    f.gap = Math.min(cfg.farmerGapStart + 60, Math.max(46, f.gap + drift * dt));
-    if (cfg.farmerSearchEvery > 0 && f.searchClock >= cfg.farmerSearchEvery) {
-      f.searchClock = 0;
-      f.state = 'search';
-      f.searchT = 2.4;
-      run.message = 'Bram is searching... HIDE!';
-      run.messageT = 1.6;
-      SoundBank.alarm();
+    if (h.kind === 'mud' || h.kind === 'gravy') {
+      if (rectsOverlap(tr, hr)) G.speedM = Math.max(G.mode.speed * 0.45, G.speedM - 6 * 0.016);
+      continue;
     }
-  }
-  f.x = TURKEY_X - f.gap;
-  if (f.gap <= 46 && !run.caught) {
-    run.lives = 0;
-    run.caught = true;
-    SoundBank.caught();
-  }
-
-  // --- Spawning ---
-  if (run.distance >= run.nextSpawnAt && run.distance < ESCAPE_DISTANCE - 120) spawnCluster(run);
-  if (run.distance >= ESCAPE_DISTANCE - 120 && run.gateX < 0) run.gateX = GAME_W + 120;
-
-  // --- Move + collide obstacles ---
-  const tb = turkeyHitbox(t);
-  for (const o of run.obstacles) {
-    if (o.type === 'knifeFall') {
-      o.y += o.vy * dt;
-      o.x -= run.speed * dt * 0.55;
-    } else {
-      o.x -= run.speed * dt;
+    if (rectsOverlap(tr, hr) && t.iframes <= 0 && !t.hidden) {
+      if (G.shield) {
+        G.shield = false;
+        t.iframes = CFG.HIT_IFRAMES;
+        spawnFloatText(G.floaters, 'SHIELD BLOCK!', t.x, t.y - 80, '#7ad0ff', true);
+        spawnSparkBurst(G.floaters, t.x, t.y, '#7ad0ff', 14);
+        AudioSys.playShield();
+        farmerSetState(G.farmer, 'STUNNED');
+        G.hazards.splice(i, 1);
+        continue;
+      }
+      G.hearts -= 1;
+      t.iframes = CFG.HIT_IFRAMES;
+      resetCombo(sk);
+      G.farmer.gap = Math.min(160, G.farmer.gap + CFG.RETREAT_M);
+      farmerSetState(G.farmer, 'RETREAT');
+      spawnFloatText(G.floaters, 'HIT!', t.x, t.y - 80, '#ff6a5a', true);
+      spawnSparkBurst(G.floaters, t.x, t.y, '#ff6a5a', 12);
+      AudioSys.playHit();
+      G.hazards.splice(i, 1);
+      if (G.hearts <= 0) { G.events.push('CAUGHT'); }
+      continue;
     }
-    if (o.x < -120 || o.y > GAME_H + 40) continue;
-    if (!o.passed && o.x + (o.w || 60) < TURKEY_X - 30) {
-      o.passed = true;
-      run.score += 15 * cfg.scoreMult;
-    }
-    if (o.hit || t.invulnT > 0) continue;
-    let box;
-    if (o.type === 'oven') box = { x: o.x + 4, y: GROUND_Y - o.h, w: o.w - 8, h: o.h };
-    else if (o.type === 'hay') box = { x: o.x + 4, y: GROUND_Y - o.h, w: o.w - 8, h: o.h };
-    else if (o.type === 'knifeSlide') box = { x: o.x - 40, y: GROUND_Y - 16, w: 80, h: 16 };
-    else box = { x: o.x - 26, y: o.y - 6, w: 52, h: 12 };
-    if (overlaps(tb, box)) {
-      o.hit = true;
-      // A sliding turkey ducks clean under a low knife.
-      if (o.type === 'knifeSlide' && t.sliding) { run.score += 25 * cfg.scoreMult; continue; }
-      hurtTurkey(run, o.type === 'oven' ? 'oven' : 'knife');
-    }
-  }
-  run.obstacles = run.obstacles.filter((o) => o.x > -160 && o.y < GAME_H + 60);
-
-  // --- Pickups ---
-  for (const p of run.pickups) {
-    p.x -= run.speed * dt;
-    p.bob = Math.sin(run.time * 5 + p.x * 0.02) * 4;
-    if (p.taken || p.x < -40) continue;
-    const pb = { x: p.x - 16, y: p.y - 18, w: 32, h: 36 };
-    if (overlaps(tb, pb)) {
-      p.taken = true;
-      if (p.type === 'corn') {
-        run.corn += 1;
-        run.score += 50 * cfg.scoreMult;
-        SoundBank.corn();
+    // near miss / clean dodge: hazard just passed the turkey untouched
+    if (!h.passed && h.x + h.w / 2 < t.x - 20) {
+      h.passed = true;
+      var dy = Math.abs((h.y) - (t.y - 10));
+      if (dy < 70 && !h.nearMissed) {
+        h.nearMissed = true;
+        sk.nearMisses++;
+        var pts = addScore(sk, 15, G.mode.scoreMult);
+        comboList(sk);
+        // A near miss buys a little breathing room from Bram.
+        G.farmer.gap = Math.min(160, G.farmer.gap + 4);
+        spawnFloatText(G.floaters, 'NEAR MISS +' + pts, t.x + 40, t.y - 80, '#ffd23a');
       } else {
-        t.shield = true;
-        run.message = 'GRAVY SHIELD! One free hit.';
-        run.messageT = 1.4;
-        SoundBank.corn();
+        sk.dodges++;
+        addScore(sk, 10, G.mode.scoreMult);
+        comboList(sk);
+        G.farmer.gap = Math.min(160, G.farmer.gap + 2);
       }
     }
   }
-  run.pickups = run.pickups.filter((p) => !p.taken && p.x > -60);
-
-  // --- The freedom gate ---
-  if (run.gateX >= 0) {
-    run.gateX -= run.speed * dt;
-    if (run.gateX <= TURKEY_X + 30 && !run.escaped) {
-      run.escaped = true;
-      run.score += 1000;
-      SoundBank.fanfare();
-    }
-  }
-
-  if (run.caught) return 'caught';
-  if (run.escaped) return 'escaped';
-  return 'playing';
 }
