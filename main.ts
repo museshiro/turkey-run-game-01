@@ -1,60 +1,68 @@
-// Pipkin's Great Escape — hand-in program (Node 22, standard library only).
-// Copies game/ and screenshots/ from this repository into the output
-// directory and writes /output/dossier.json with buildDossier from
-// vendor/makefun-game.ts. Outside the grader, MAKEFUN_OUTPUT_DIR stands
-// in for /output. Nothing is written anywhere else.
-import { cpSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// main.ts — Pipkin's Great Escape (turkey-run-game-01 v2).
+// Copies game/ and screenshots/ into the output directory and writes
+// dossier.json with buildDossier from vendor/makefun-game.ts.
+// Node 22, standard library only. Deterministic: two runs write
+// byte-identical output.
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const repoRoot = dirname(fileURLToPath(import.meta.url));
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR || '/output';
-
-// The scorer's own caps, so the dossier we write is the one it expects.
-const caps = {
+// CAPS — the same caps the scorer uses: source text at most 160 KiB,
+// at most 4 screenshots of at most 256 KiB each, game at most 993
+// files and 48 MiB in all.
+const CAPS = {
   text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 256 * 1024 },
-  game_max_files: 993,
-  game_max_bytes: 48 * 1024 * 1024,
-  game_path_max_bytes: 1000,
+  max_images: 4,
+  image_max_bytes: 262144,
+  max_files: 993,
+  max_bytes: 48 * 1024 * 1024,
 };
 
-function copyTree(name: string): void {
-  const from = join(repoRoot, name);
-  const to = join(outputDir, name);
-  cpSync(from, to, { recursive: true, dereference: false });
-}
+const ROOT = dirname(fileURLToPath(import.meta.url));
+const OUT = process.env.MAKEFUN_OUTPUT_DIR
+  ? resolve(process.env.MAKEFUN_OUTPUT_DIR)
+  : '/output';
 
-function countFiles(dir: string): number {
-  let n = 0;
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    n += statSync(p).isDirectory() ? countFiles(p) : 1;
+// cleanChild — remove one child inside the output directory only.
+// Never touches the output directory itself: on the grader /output
+// is a mount whose parent is read-only, so deleting it fails the run.
+async function cleanChild(outDir: string, name: string): Promise<void> {
+  try {
+    await rm(join(outDir, name), { recursive: true, force: true });
+  } catch (err) {
+    console.warn(`warning: could not remove ${name} from output: ${String(err)}`);
   }
-  return n;
 }
 
-function main(): void {
-  // Clean only the contents we own inside outputDir, never outputDir itself:
-  // on the grader /output is a writable mount whose parent (/) is read-only,
-  // so removing /output itself needs a write to / and fails with EPERM/EROFS.
-  for (const child of ['game', 'screenshots', 'dossier.json']) {
-    try {
-      rmSync(join(outputDir, child), { recursive: true, force: true });
-    } catch (err) {
-      // A stale child we cannot remove must not abort the run: copyTree
-      // below overwrites game/screenshots and dossier.json is rewritten,
-      // so the worst case is leftover files, not a failed submission.
-      console.warn(`warn: could not remove ${join(outputDir, child)}: ${(err as Error).message}`);
-    }
-  }
-  mkdirSync(outputDir, { recursive: true });
-  copyTree('game');
-  copyTree('screenshots');
-  const dossier = buildDossier(outputDir, caps);
-  writeFileSync(join(outputDir, 'dossier.json'), dossier);
-  console.log(`wrote ${outputDir} (game: ${countFiles(join(outputDir, 'game'))} files, dossier ${dossier.length} bytes)`);
+async function main(): Promise<void> {
+  const outDir = OUT;
+  // Clear only the three children we own, each in its own try/catch,
+  // so a missing child is a no-op and a stuck child only warns.
+  await cleanChild(outDir, 'game');
+  await cleanChild(outDir, 'screenshots');
+  await cleanChild(outDir, 'dossier.json');
+
+  // Create the output directory if it does not exist (idempotent).
+  await mkdir(outDir, { recursive: true });
+
+  // Copy the game and its screenshots from the repository.
+  await cp(join(ROOT, 'game'), join(outDir, 'game'), { recursive: true });
+  await cp(join(ROOT, 'screenshots'), join(outDir, 'screenshots'), { recursive: true });
+
+  // Build the dossier from what is now in the output directory, so
+  // the dossier the gate rebuilds from /output matches byte for byte.
+  // buildDossier returns the dossier bytes (a Uint8Array); write them
+  // raw — stringifying them would inflate the file past the cap.
+  const dossier = await buildDossier(outDir, CAPS);
+  const bytes = typeof dossier === 'string'
+    ? Buffer.from(dossier, 'utf8')
+    : Buffer.from(dossier as Uint8Array);
+  await writeFile(join(outDir, 'dossier.json'), bytes);
+  console.log(`wrote ${outDir}/dossier.json (${bytes.length} bytes)`);
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
